@@ -19,7 +19,7 @@ from app.models import (
     TaggingResult,
     Transaction,
 )
-from app.pipeline.llm_classifier import classify_transaction_no_llm
+from app.pipeline.llm_classifier import LLMClassifier
 from app.pipeline.preprocessor import normalize_vendor
 from app.pipeline.router import route_by_confidence
 from app.pipeline.validator import validate_classification_output
@@ -53,6 +53,7 @@ for configured_tenant_id, tenant_cfg in app_config.tenants.items():
     rules_paths[configured_tenant_id] = tenant_cfg.rules_path
 
 rule_store = RuleStore(APP_ROOT, rules_paths, coa_ids_by_tenant)
+llm_classifier = LLMClassifier()
 
 
 def _transaction_fingerprint(transaction: Transaction) -> str:
@@ -103,57 +104,77 @@ def tag_transaction(transaction: Transaction) -> TaggingResult:
             audit_store.append(result)
             accounting_sync.sync(result)
         else:
-            tenant_coa = coa_by_tenant[transaction.tenant_id]
-            classification = classify_transaction_no_llm(transaction, tenant_coa)
-            valid_coa_ids = coa_ids_by_tenant[transaction.tenant_id]
-            is_valid = validate_classification_output(classification, valid_coa_ids)
+            tenant_id = transaction.tenant_id
+            tenant_coa = coa_by_tenant[tenant_id]
+            tenant_config = app_config.tenants[tenant_id]
+            classification_result = llm_classifier.classify(
+                transaction,
+                tenant_coa,
+                tenant_name=tenant_config.tenant_name,
+            )
 
-            if not is_valid:
+            if classification_result.output is None:
                 result = TaggingResult(
                     tx_id=transaction.tx_id,
-                    tenant_id=transaction.tenant_id,
+                    tenant_id=tenant_id,
                     status="UNKNOWN",
                     source="unknown",
                     coa_account_id=None,
-                    confidence=None,
-                    reasoning="Classifier output account is outside tenant CoA.",
+                    confidence=0.0,
+                    reasoning=f"LLM classification unavailable: {classification_result.error_reason}.",
                     timestamp=datetime.now(timezone.utc),
                     idempotency_key=transaction.idempotency_key,
                 )
                 audit_store.append(result)
             else:
-                tenant_config = app_config.tenants[transaction.tenant_id]
-                status = route_by_confidence(
-                    classification.confidence,
-                    review_threshold=tenant_config.review_threshold,
-                    auto_post_threshold=tenant_config.auto_post_threshold,
-                )
-                result = TaggingResult(
-                    tx_id=transaction.tx_id,
-                    tenant_id=transaction.tenant_id,
-                    status=status,
-                    source="llm" if status in {"AUTO_TAG", "REVIEW_QUEUE"} else "unknown",
-                    coa_account_id=classification.coa_account_id if status != "UNKNOWN" else None,
-                    confidence=classification.confidence if status != "UNKNOWN" else None,
-                    reasoning=classification.reasoning,
-                    timestamp=datetime.now(timezone.utc),
-                    idempotency_key=transaction.idempotency_key,
-                )
-                audit_store.append(result)
-                if status == "AUTO_TAG":
-                    accounting_sync.sync(result)
-                if status == "REVIEW_QUEUE":
-                    review_queue_store.add(
-                        ReviewQueueItem(
-                            tx_id=transaction.tx_id,
-                            tenant_id=transaction.tenant_id,
-                            vendor_key=vendor_key,
-                            suggested_coa_account_id=classification.coa_account_id,
-                            confidence=classification.confidence,
-                            reasoning=classification.reasoning,
-                            idempotency_key=transaction.idempotency_key,
-                        )
+                classification = classification_result.output
+                valid_coa_ids = coa_ids_by_tenant[tenant_id]
+                is_valid = validate_classification_output(classification, valid_coa_ids)
+                if not is_valid:
+                    result = TaggingResult(
+                        tx_id=transaction.tx_id,
+                        tenant_id=tenant_id,
+                        status="UNKNOWN",
+                        source="unknown",
+                        coa_account_id=None,
+                        confidence=None,
+                        reasoning="Classifier output account is outside tenant CoA.",
+                        timestamp=datetime.now(timezone.utc),
+                        idempotency_key=transaction.idempotency_key,
                     )
+                    audit_store.append(result)
+                else:
+                    status = route_by_confidence(
+                        classification.confidence,
+                        review_threshold=tenant_config.review_threshold,
+                        auto_post_threshold=tenant_config.auto_post_threshold,
+                    )
+                    result = TaggingResult(
+                        tx_id=transaction.tx_id,
+                        tenant_id=tenant_id,
+                        status=status,
+                        source="llm" if status in {"AUTO_TAG", "REVIEW_QUEUE"} else "unknown",
+                        coa_account_id=classification.coa_account_id if status != "UNKNOWN" else None,
+                        confidence=classification.confidence if status != "UNKNOWN" else None,
+                        reasoning=classification.reasoning,
+                        timestamp=datetime.now(timezone.utc),
+                        idempotency_key=transaction.idempotency_key,
+                    )
+                    audit_store.append(result)
+                    if status == "AUTO_TAG":
+                        accounting_sync.sync(result)
+                    if status == "REVIEW_QUEUE":
+                        review_queue_store.add(
+                            ReviewQueueItem(
+                                tx_id=transaction.tx_id,
+                                tenant_id=tenant_id,
+                                vendor_key=vendor_key,
+                                suggested_coa_account_id=classification.coa_account_id,
+                                confidence=classification.confidence,
+                                reasoning=classification.reasoning,
+                                idempotency_key=transaction.idempotency_key,
+                            )
+                        )
 
         idempotency_store.put(
             transaction.tenant_id,
