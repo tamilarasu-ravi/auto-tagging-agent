@@ -1,11 +1,16 @@
 from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 from app.config import AppConfig, load_app_config
 from app.main import app
 from app.models import Transaction
+
+
+def _unique_key(prefix: str) -> str:
+    return f"{prefix}_{uuid4().hex}"
 
 
 def test_health_endpoint_returns_ok() -> None:
@@ -27,7 +32,7 @@ def test_tag_endpoint_rule_match_auto_tags() -> None:
         "date": "2026-04-29",
         "transaction_type": "card",
         "ocr_text": None,
-        "idempotency_key": "idem_001",
+        "idempotency_key": _unique_key("idem_001"),
     }
 
     response = client.post("/transactions/tag", json=payload)
@@ -51,7 +56,7 @@ def test_tag_endpoint_no_rule_routes_to_unknown() -> None:
         "date": "2026-04-29",
         "transaction_type": "card",
         "ocr_text": None,
-        "idempotency_key": "idem_002",
+        "idempotency_key": _unique_key("idem_002"),
     }
 
     response = client.post("/transactions/tag", json=payload)
@@ -74,7 +79,7 @@ def test_idempotency_returns_cached_result_for_same_payload() -> None:
         "date": "2026-04-29",
         "transaction_type": "card",
         "ocr_text": None,
-        "idempotency_key": "idem_003",
+        "idempotency_key": _unique_key("idem_003"),
     }
 
     first = client.post("/transactions/tag", json=payload)
@@ -96,7 +101,7 @@ def test_idempotency_key_conflict_when_payload_differs() -> None:
         "date": "2026-04-29",
         "transaction_type": "card",
         "ocr_text": None,
-        "idempotency_key": "idem_004",
+        "idempotency_key": _unique_key("idem_004"),
     }
     payload_b = {**payload_a, "amount": "42.00"}
 
@@ -105,6 +110,82 @@ def test_idempotency_key_conflict_when_payload_differs() -> None:
 
     assert first.status_code == 200
     assert second.status_code == 409
+
+
+def test_tag_endpoint_llm_path_auto_tags_when_confidence_is_high() -> None:
+    client = TestClient(app)
+    payload = {
+        "tx_id": "tx_005",
+        "tenant_id": "tenant_a",
+        "vendor_raw": "AWS Marketplace",
+        "amount": "210.00",
+        "currency": "USD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": None,
+        "idempotency_key": _unique_key("idem_005"),
+    }
+
+    response = client.post("/transactions/tag", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "AUTO_TAG"
+    assert data["source"] == "llm"
+    assert data["coa_account_id"] == "6200"
+    assert data["confidence"] == 0.93
+
+
+def test_tag_endpoint_llm_path_routes_to_review_queue_when_confidence_is_medium() -> None:
+    client = TestClient(app)
+    payload = {
+        "tx_id": "tx_006",
+        "tenant_id": "tenant_a",
+        "vendor_raw": "Grab SG 0023",
+        "amount": "18.50",
+        "currency": "SGD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": None,
+        "idempotency_key": _unique_key("idem_006"),
+    }
+
+    response = client.post("/transactions/tag", json=payload)
+    queue_response = client.get("/review-queue/tenant_a")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "REVIEW_QUEUE"
+    assert data["source"] == "llm"
+    assert data["coa_account_id"] == "7200"
+    assert data["confidence"] == 0.65
+
+    assert queue_response.status_code == 200
+    review_items = queue_response.json()
+    assert any(item["tx_id"] == "tx_006" for item in review_items)
+
+
+def test_tag_endpoint_llm_result_invalid_for_tenant_routes_to_unknown() -> None:
+    client = TestClient(app)
+    payload = {
+        "tx_id": "tx_007",
+        "tenant_id": "tenant_b",
+        "vendor_raw": "AWS Marketplace",
+        "amount": "350.00",
+        "currency": "USD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": None,
+        "idempotency_key": _unique_key("idem_007"),
+    }
+
+    response = client.post("/transactions/tag", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "UNKNOWN"
+    assert data["source"] == "unknown"
+    assert data["coa_account_id"] is None
 
 
 def test_load_app_config_reads_tenants() -> None:
