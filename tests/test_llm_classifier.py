@@ -78,7 +78,8 @@ def test_llm_classifier_429_retries_then_fallbacks() -> None:
                         "content": '{"coa_account_id":"6200","confidence":0.91,"reasoning":"cloud"}'
                     }
                 }
-            ]
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         }
 
     classifier = LLMClassifier(
@@ -93,6 +94,7 @@ def test_llm_classifier_429_retries_then_fallbacks() -> None:
 
     assert result.output is not None
     assert result.provider_name == "claude"
+    assert result.total_tokens == 15
     assert attempts["gemini/model"] == 3
     assert calls == ["gemini/model", "gemini/model", "gemini/model", "claude/model"]
 
@@ -123,3 +125,62 @@ def test_sanitize_ocr_text_masks_email_and_card_last4_patterns() -> None:
     assert "[REDACTED_EMAIL]" in sanitized
     assert "1234" not in sanitized
     assert "9876" not in sanitized
+
+
+def test_llm_classifier_parses_json_wrapped_in_extra_text() -> None:
+    def completion_fn(*, model: str, messages: list[dict[str, str]], temperature: float, timeout: float) -> object:
+        _ = model, messages, temperature, timeout
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": 'Sure. {"coa_account_id":"6200","confidence":0.88,"reasoning":"cloud spend"} Thanks.'
+                    }
+                }
+            ]
+        }
+
+    classifier = LLMClassifier(
+        provider_chain=[ProviderConfig(name="gemini", model="gemini/model")],
+        completion_fn=completion_fn,
+    )
+    result = classifier.classify(_sample_transaction(), _sample_coa(), tenant_name="Tenant A")
+
+    assert result.output is not None
+    assert result.output.coa_account_id == "6200"
+
+
+def test_llm_classifier_injects_few_shot_examples_into_prompt() -> None:
+    captured_messages: list[dict[str, str]] = []
+
+    def completion_fn(*, model: str, messages: list[dict[str, str]], temperature: float, timeout: float) -> object:
+        _ = model, temperature, timeout
+        captured_messages.extend(messages)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"coa_account_id":"6200","confidence":0.90,"reasoning":"cloud"}'
+                    }
+                }
+            ]
+        }
+
+    classifier = LLMClassifier(
+        provider_chain=[ProviderConfig(name="gemini", model="gemini/model")],
+        completion_fn=completion_fn,
+    )
+    examples = [
+        {"vendor": "aws-marketplace", "coa_account_id": "6200"},
+        {"vendor": "grab-sg-0023", "coa_account_id": "7200"},
+    ]
+    classifier.classify(
+        _sample_transaction(),
+        _sample_coa(),
+        tenant_name="Tenant A",
+        few_shot_examples=examples,
+    )
+
+    user_message = next(message for message in captured_messages if message["role"] == "user")
+    assert '"vendor": "aws-marketplace"' in user_message["content"]
+    assert '"vendor": "grab-sg-0023"' in user_message["content"]

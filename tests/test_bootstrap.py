@@ -218,6 +218,7 @@ def test_resolve_review_item_accept_removes_from_queue() -> None:
             "tenant_id": "tenant_a",
             "action": "accept",
             "final_coa_account_id": "7200",
+            "reviewer_id": "reviewer_1",
         },
         headers=_headers("tenant_a"),
     )
@@ -228,6 +229,8 @@ def test_resolve_review_item_accept_removes_from_queue() -> None:
     assert data["result"]["status"] == "AUTO_TAG"
     assert data["result"]["coa_account_id"] == "7200"
     assert data["rule_created"] is False
+    assert data["resolved_by"] == "reviewer_1"
+    assert data["resolved_at"] is not None
     assert queue_response.status_code == 200
     assert all(item["tx_id"] != tx_id for item in queue_response.json())
 
@@ -264,6 +267,45 @@ def test_resolve_review_item_correct_overrides_coa() -> None:
     assert data["result"]["status"] == "AUTO_TAG"
     assert data["result"]["coa_account_id"] == "6100"
     assert data["rule_created"] is True
+
+
+def test_resolve_review_item_is_idempotent_after_first_resolution() -> None:
+    client = TestClient(app)
+    tx_id = _unique_key("tx_009b")
+    vendor_raw = f"Grab SG {_unique_key('replay')}"
+    payload = {
+        "tx_id": tx_id,
+        "tenant_id": "tenant_a",
+        "vendor_raw": vendor_raw,
+        "amount": "18.50",
+        "currency": "SGD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": None,
+        "idempotency_key": _unique_key("idem_009b"),
+    }
+    client.post("/transactions/tag", json=payload, headers=_headers("tenant_a"))
+
+    request_payload = {
+        "tenant_id": "tenant_a",
+        "action": "correct",
+        "final_coa_account_id": "6100",
+        "reviewer_id": "reviewer_replay",
+    }
+    first = client.post(
+        f"/review-queue/{tx_id}/resolve",
+        json=request_payload,
+        headers=_headers("tenant_a"),
+    )
+    second = client.post(
+        f"/review-queue/{tx_id}/resolve",
+        json=request_payload,
+        headers=_headers("tenant_a"),
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
 
 
 def test_reviewer_correction_promotes_vendor_rule_for_next_transaction() -> None:

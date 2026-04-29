@@ -24,6 +24,7 @@ from app.pipeline.preprocessor import normalize_vendor
 from app.pipeline.router import route_by_confidence
 from app.pipeline.validator import validate_classification_output
 from app.store.audit_log import AuditLogStore
+from app.store.confirmed_example_store import ConfirmedExampleStore
 from app.store.idempotency_store import IdempotencyStore
 from app.store.review_queue import ReviewQueueStore
 from app.store.rule_store import RuleStore
@@ -40,6 +41,7 @@ audit_store = AuditLogStore(STATE_DB_PATH)
 accounting_sync = MockAccountingSyncAdapter()
 idempotency_store = IdempotencyStore(STATE_DB_PATH)
 review_queue_store = ReviewQueueStore(STATE_DB_PATH)
+confirmed_example_store = ConfirmedExampleStore(STATE_DB_PATH)
 processing_lock = threading.RLock()
 
 coa_by_tenant: dict[str, list[CoAAccount]] = {}
@@ -125,6 +127,12 @@ def tag_transaction(
                 transaction,
                 tenant_coa,
                 tenant_name=tenant_config.tenant_name,
+                few_shot_examples=confirmed_example_store.sample_examples(
+                    tenant_id,
+                    exclude_vendor_key=vendor_key,
+                    tx_id=transaction.tx_id,
+                    limit=5,
+                ),
             )
 
             if classification_result.output is None:
@@ -138,6 +146,11 @@ def tag_transaction(
                     reasoning=f"LLM classification unavailable: {classification_result.error_reason}.",
                     timestamp=datetime.now(timezone.utc),
                     idempotency_key=transaction.idempotency_key,
+                    provider_name=classification_result.provider_name,
+                    latency_ms=classification_result.latency_ms,
+                    prompt_tokens=classification_result.prompt_tokens,
+                    completion_tokens=classification_result.completion_tokens,
+                    total_tokens=classification_result.total_tokens,
                 )
                 audit_store.append(result)
             else:
@@ -173,6 +186,11 @@ def tag_transaction(
                         reasoning=classification.reasoning,
                         timestamp=datetime.now(timezone.utc),
                         idempotency_key=transaction.idempotency_key,
+                            provider_name=classification_result.provider_name,
+                            latency_ms=classification_result.latency_ms,
+                            prompt_tokens=classification_result.prompt_tokens,
+                            completion_tokens=classification_result.completion_tokens,
+                            total_tokens=classification_result.total_tokens,
                     )
                     audit_store.append(result)
                     if status == "AUTO_TAG":
@@ -231,6 +249,10 @@ def resolve_review_item(
         raise HTTPException(status_code=422, detail="final_coa_account_id is not in tenant CoA.")
 
     with processing_lock:
+        existing_resolution = review_queue_store.get_resolution(request.tenant_id, tx_id)
+        if existing_resolution is not None:
+            return existing_resolution
+
         queued_item = review_queue_store.resolve(request.tenant_id, tx_id)
         if queued_item is None:
             raise HTTPException(status_code=404, detail="Review item not found.")
@@ -252,6 +274,15 @@ def resolve_review_item(
         )
         audit_store.append(resolved_result)
         accounting_sync.sync(resolved_result)
+        confirmed_example_store.add_example(
+            request.tenant_id,
+            queued_item.vendor_key,
+            {
+                "vendor_key": queued_item.vendor_key,
+                "coa_account_id": request.final_coa_account_id,
+                "action": request.action,
+            },
+        )
         rule_created = False
         if request.action == "correct":
             promoted_rule = VendorRule(
@@ -265,7 +296,14 @@ def resolve_review_item(
             rule_store.upsert_rule(promoted_rule)
             rule_created = True
 
-        return ReviewResolveResponse(result=resolved_result, rule_created=rule_created)
+        response = ReviewResolveResponse(
+            result=resolved_result,
+            rule_created=rule_created,
+            resolved_at=datetime.now(timezone.utc),
+            resolved_by=request.reviewer_id,
+        )
+        review_queue_store.save_resolution(request.tenant_id, tx_id, response)
+        return response
 
 
 @app.get("/audit-log/{tenant_id}")

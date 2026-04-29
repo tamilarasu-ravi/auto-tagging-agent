@@ -42,6 +42,11 @@ class TaggingResult(BaseModel):
     reasoning: str | None
     timestamp: datetime
     idempotency_key: str
+    provider_name: str | None = None
+    latency_ms: float | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class VendorRule(BaseModel):
@@ -57,11 +62,14 @@ class ReviewResolveRequest(BaseModel):
     tenant_id: str
     action: Literal["accept", "correct"]
     final_coa_account_id: str
+    reviewer_id: str | None = None
 
 
 class ReviewResolveResponse(BaseModel):
     result: TaggingResult
     rule_created: bool
+    resolved_at: datetime
+    resolved_by: str | None = None
 
 
 class ReviewQueueItem(BaseModel):

@@ -26,6 +26,10 @@ class LLMClassificationResult:
     output: LLMClassificationOutput | None
     provider_name: str | None
     error_reason: str | None
+    latency_ms: float | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 CompletionFn = Callable[..., object]
@@ -53,6 +57,7 @@ class LLMClassifier:
         transaction: Transaction,
         tenant_coa: list[CoAAccount],
         tenant_name: str,
+        few_shot_examples: list[dict[str, object]] | None = None,
         timeout_budget_s: float = 15.0,
     ) -> LLMClassificationResult:
         """Classifies a transaction using fallback chain or deterministic fallback when no providers exist."""
@@ -64,7 +69,7 @@ class LLMClassifier:
             )
 
         deadline = self._time_fn() + timeout_budget_s
-        messages = _build_messages(transaction, tenant_coa, tenant_name)
+        messages = _build_messages(transaction, tenant_coa, tenant_name, few_shot_examples or [])
         completion_fn = self._completion_fn or _default_completion_fn
 
         for provider in self._provider_chain:
@@ -80,6 +85,7 @@ class LLMClassifier:
 
                 try:
                     timeout_s = max(0.1, min(8.0, deadline - now))
+                    call_started = self._time_fn()
                     response = completion_fn(
                         model=provider.model,
                         messages=messages,
@@ -87,10 +93,16 @@ class LLMClassifier:
                         timeout=timeout_s,
                     )
                     output = _parse_response_output(response)
+                    usage = _extract_usage(response)
+                    latency_ms = (self._time_fn() - call_started) * 1000.0
                     return LLMClassificationResult(
                         output=output,
                         provider_name=provider.name,
                         error_reason=None,
+                        latency_ms=latency_ms,
+                        prompt_tokens=usage.get("prompt_tokens"),
+                        completion_tokens=usage.get("completion_tokens"),
+                        total_tokens=usage.get("total_tokens"),
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     status_code = _extract_status_code(exc)
@@ -145,6 +157,7 @@ def _build_messages(
     transaction: Transaction,
     tenant_coa: list[CoAAccount],
     tenant_name: str,
+    few_shot_examples: list[dict[str, object]],
 ) -> list[dict[str, str]]:
     """Constructs system/user messages for JSON-only classification."""
     coa_lines = "\n".join(
@@ -166,7 +179,9 @@ def _build_messages(
         f"Amount: {transaction.amount} {transaction.currency}\n"
         f"Date: {transaction.date}\n"
         f"Type: {transaction.transaction_type}\n"
-        f"OCR: {sanitize_ocr_text(transaction.ocr_text)}"
+        f"OCR: {sanitize_ocr_text(transaction.ocr_text)}\n"
+        "HISTORICAL EXAMPLES FOR THIS TENANT:\n"
+        f"{json.dumps(few_shot_examples, ensure_ascii=True)}"
     )
     return [
         {"role": "system", "content": system_prompt},
@@ -190,8 +205,43 @@ def _parse_response_output(response: object) -> LLMClassificationOutput:
         content = response["choices"][0]["message"]["content"]
     else:
         content = response.choices[0].message.content  # type: ignore[attr-defined]
-    payload = json.loads(content)
+    payload = _extract_json_payload(str(content))
     return LLMClassificationOutput(**payload)
+
+
+def _extract_json_payload(content: str) -> dict[str, object]:
+    """Extracts the first valid JSON object from model output text."""
+    content = content.strip()
+    if content.startswith("{") and content.endswith("}"):
+        return json.loads(content)
+
+    candidates = re.findall(r"\{.*?\}", content, flags=re.DOTALL)
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+    raise json.JSONDecodeError("No JSON object found in model output", content, 0)
+
+
+def _extract_usage(response: object) -> dict[str, int]:
+    """Extracts token usage counters from a LiteLLM/OpenAI-like response."""
+    usage: object | None = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
+    if usage is None:
+        return {}
+    if isinstance(usage, dict):
+        return {
+            "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+            "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+            "total_tokens": int(usage.get("total_tokens", 0) or 0),
+        }
+    return {
+        "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+        "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+        "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+    }
 
 
 def _extract_status_code(exc: Exception) -> int | None:

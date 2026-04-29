@@ -5,7 +5,7 @@ from pathlib import Path
 import sqlite3
 import threading
 
-from app.models import ReviewQueueItem
+from app.models import ReviewQueueItem, ReviewResolveResponse
 
 
 class ReviewQueueStore:
@@ -33,6 +33,16 @@ class ReviewQueueStore:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_review_queue_tenant_id ON review_queue(tenant_id)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS review_resolution (
+                    tenant_id TEXT NOT NULL,
+                    tx_id TEXT NOT NULL,
+                    response_json TEXT NOT NULL,
+                    PRIMARY KEY (tenant_id, tx_id)
+                )
+                """
             )
 
     def add(self, item: ReviewQueueItem) -> None:
@@ -104,3 +114,31 @@ class ReviewQueueStore:
                     (tenant_id,),
                 ).fetchall()
             return [ReviewQueueItem(**json.loads(row[0])) for row in rows]
+
+    def get_resolution(self, tenant_id: str, tx_id: str) -> ReviewResolveResponse | None:
+        """Returns previously persisted resolution response for idempotent replay."""
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    """
+                    SELECT response_json
+                    FROM review_resolution
+                    WHERE tenant_id = ? AND tx_id = ?
+                    """,
+                    (tenant_id, tx_id),
+                ).fetchone()
+            if row is None:
+                return None
+            return ReviewResolveResponse(**json.loads(row[0]))
+
+    def save_resolution(self, tenant_id: str, tx_id: str, response: ReviewResolveResponse) -> None:
+        """Persists a review resolution response for idempotent replay."""
+        with self._lock:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO review_resolution (tenant_id, tx_id, response_json)
+                    VALUES (?, ?, ?)
+                    """,
+                    (tenant_id, tx_id, json.dumps(response.model_dump(mode="json"), ensure_ascii=True)),
+                )
