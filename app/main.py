@@ -10,7 +10,13 @@ from fastapi import FastAPI, HTTPException
 
 from app.adapters.accounting_sync import MockAccountingSyncAdapter
 from app.config import AppConfig, load_app_config
-from app.models import CoAAccount, TaggingResult, Transaction
+from app.models import (
+    CoAAccount,
+    ReviewResolveRequest,
+    ReviewResolveResponse,
+    TaggingResult,
+    Transaction,
+)
 from app.pipeline.llm_classifier import classify_transaction_no_llm
 from app.pipeline.preprocessor import normalize_vendor
 from app.pipeline.router import route_by_confidence
@@ -160,6 +166,42 @@ def get_review_queue(tenant_id: str) -> list[dict[str, object]]:
         }
         for item in review_queue_store.list_by_tenant(tenant_id)
     ]
+
+
+@app.post("/review-queue/{tx_id}/resolve")
+def resolve_review_item(tx_id: str, request: ReviewResolveRequest) -> ReviewResolveResponse:
+    """Resolves a review queue item by accepting or correcting the suggested account."""
+    if request.tenant_id not in app_config.tenants:
+        raise HTTPException(status_code=404, detail="Unknown tenant_id.")
+
+    valid_coa_ids = coa_ids_by_tenant[request.tenant_id]
+    if request.final_coa_account_id not in valid_coa_ids:
+        raise HTTPException(status_code=422, detail="final_coa_account_id is not in tenant CoA.")
+
+    with processing_lock:
+        queued_item = review_queue_store.resolve(request.tenant_id, tx_id)
+        if queued_item is None:
+            raise HTTPException(status_code=404, detail="Review item not found.")
+
+        resolved_result = TaggingResult(
+            tx_id=queued_item.tx_id,
+            tenant_id=queued_item.tenant_id,
+            status="AUTO_TAG",
+            source="llm",
+            coa_account_id=request.final_coa_account_id,
+            confidence=queued_item.confidence,
+            reasoning=(
+                queued_item.reasoning
+                if request.action == "accept"
+                else f"Reviewer corrected suggestion to {request.final_coa_account_id}."
+            ),
+            timestamp=datetime.now(timezone.utc),
+            idempotency_key=queued_item.idempotency_key,
+        )
+        audit_store.append(resolved_result)
+        accounting_sync.sync(resolved_result)
+
+        return ReviewResolveResponse(result=resolved_result, rule_created=False)
 
 
 @app.get("/audit-log/{tenant_id}")

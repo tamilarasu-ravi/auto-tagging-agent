@@ -188,6 +188,101 @@ def test_tag_endpoint_llm_result_invalid_for_tenant_routes_to_unknown() -> None:
     assert data["coa_account_id"] is None
 
 
+def test_resolve_review_item_accept_removes_from_queue() -> None:
+    client = TestClient(app)
+    tx_id = _unique_key("tx_008")
+    payload = {
+        "tx_id": tx_id,
+        "tenant_id": "tenant_a",
+        "vendor_raw": "Grab SG 0023",
+        "amount": "18.50",
+        "currency": "SGD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": None,
+        "idempotency_key": _unique_key("idem_008"),
+    }
+    client.post("/transactions/tag", json=payload)
+
+    resolve_response = client.post(
+        f"/review-queue/{tx_id}/resolve",
+        json={
+            "tenant_id": "tenant_a",
+            "action": "accept",
+            "final_coa_account_id": "7200",
+        },
+    )
+    queue_response = client.get("/review-queue/tenant_a")
+
+    assert resolve_response.status_code == 200
+    data = resolve_response.json()
+    assert data["result"]["status"] == "AUTO_TAG"
+    assert data["result"]["coa_account_id"] == "7200"
+    assert data["rule_created"] is False
+    assert queue_response.status_code == 200
+    assert all(item["tx_id"] != tx_id for item in queue_response.json())
+
+
+def test_resolve_review_item_correct_overrides_coa() -> None:
+    client = TestClient(app)
+    tx_id = _unique_key("tx_009")
+    payload = {
+        "tx_id": tx_id,
+        "tenant_id": "tenant_a",
+        "vendor_raw": "Grab SG 0023",
+        "amount": "18.50",
+        "currency": "SGD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": None,
+        "idempotency_key": _unique_key("idem_009"),
+    }
+    client.post("/transactions/tag", json=payload)
+
+    resolve_response = client.post(
+        f"/review-queue/{tx_id}/resolve",
+        json={
+            "tenant_id": "tenant_a",
+            "action": "correct",
+            "final_coa_account_id": "6100",
+        },
+    )
+
+    assert resolve_response.status_code == 200
+    data = resolve_response.json()
+    assert data["result"]["status"] == "AUTO_TAG"
+    assert data["result"]["coa_account_id"] == "6100"
+    assert data["rule_created"] is False
+
+
+def test_resolve_review_item_rejects_invalid_tenant_coa_account() -> None:
+    client = TestClient(app)
+    tx_id = _unique_key("tx_010")
+    payload = {
+        "tx_id": tx_id,
+        "tenant_id": "tenant_a",
+        "vendor_raw": "Grab SG 0023",
+        "amount": "18.50",
+        "currency": "SGD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": None,
+        "idempotency_key": _unique_key("idem_010"),
+    }
+    client.post("/transactions/tag", json=payload)
+
+    resolve_response = client.post(
+        f"/review-queue/{tx_id}/resolve",
+        json={
+            "tenant_id": "tenant_a",
+            "action": "correct",
+            "final_coa_account_id": "9999",
+        },
+    )
+
+    assert resolve_response.status_code == 422
+
+
 def test_load_app_config_reads_tenants() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     config = load_app_config(repo_root / "data" / "tenants.json")

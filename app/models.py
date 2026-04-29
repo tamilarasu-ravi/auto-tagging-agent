@@ -51,3 +51,14 @@ class VendorRule(BaseModel):
     created_by: Literal["reviewer", "import"]
     created_at: datetime
     source_tx_id: str | None = None
+
+
+class ReviewResolveRequest(BaseModel):
+    tenant_id: str
+    action: Literal["accept", "correct"]
+    final_coa_account_id: str
+
+
+class ReviewResolveResponse(BaseModel):
+    result: TaggingResult
+    rule_created: bool
