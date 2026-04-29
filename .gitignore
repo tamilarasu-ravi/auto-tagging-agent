@@ -1,2 +1,43 @@
-docs/
+# --- Secrets / local env ---
 .env
+.env.*
+!.env.example
+
+# --- Virtual environments ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- Python bytecode / caches ---
+__pycache__/
+*.py[cod]
+
+# --- Test / coverage ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# --- Type checkers / linters ---
+.mypy_cache/
+.pyright/
+.ruff_cache/
+
+# --- Build / packaging ---
+build/
+dist/
+*.egg-info/
+
+# --- Logs / temp ---
+*.log
+*.tmp
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
+
+docs/

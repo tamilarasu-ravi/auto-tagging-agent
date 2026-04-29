@@ -1,0 +1,1 @@
+"""Audit log store placeholder."""

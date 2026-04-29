@@ -1,0 +1,10 @@
+[
+  {
+    "tenant_id": "tenant_a",
+    "vendor_key": "zoom us",
+    "coa_account_id": "6100",
+    "created_by": "import",
+    "created_at": "2026-01-01T00:00:00Z",
+    "source_tx_id": null
+  }
+]

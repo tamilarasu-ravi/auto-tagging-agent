@@ -1,0 +1,20 @@
+{
+  "tenants": [
+    {
+      "tenant_id": "tenant_a",
+      "tenant_name": "Tenant A",
+      "review_threshold": 0.5,
+      "auto_post_threshold": 0.85,
+      "coa_path": "data/coa/tenant_a.json",
+      "rules_path": "data/rules/tenant_a_rules.json"
+    },
+    {
+      "tenant_id": "tenant_b",
+      "tenant_name": "Tenant B",
+      "review_threshold": 0.5,
+      "auto_post_threshold": 0.85,
+      "coa_path": "data/coa/tenant_b.json",
+      "rules_path": "data/rules/tenant_b_rules.json"
+    }
+  ]
+}

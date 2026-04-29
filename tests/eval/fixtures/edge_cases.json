@@ -1,0 +1,13 @@
+[
+  {
+    "tx_id": "eval_001",
+    "tenant_id": "tenant_a",
+    "vendor_raw": "PTTEP THAILAND FUEL 0049",
+    "amount": 340.0,
+    "currency": "THB",
+    "expected_status": "REVIEW_QUEUE",
+    "expected_coa_account_id": null,
+    "difficulty": "long-tail",
+    "note": "Obscure vendor, should not auto-tag at high confidence"
+  }
+]

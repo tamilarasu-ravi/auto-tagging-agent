@@ -1,0 +1,17 @@
+[
+  {
+    "account_id": "5050",
+    "name": "COGS - Software",
+    "description": "Software costs booked under cost of goods sold"
+  },
+  {
+    "account_id": "7100",
+    "name": "Travel & Accommodation",
+    "description": "Flights, hotels, and related travel expenses"
+  },
+  {
+    "account_id": "7300",
+    "name": "Professional Services",
+    "description": "Contractors, legal, and consulting fees"
+  }
+]

@@ -1,0 +1,17 @@
+[
+  {
+    "account_id": "6100",
+    "name": "SaaS Tools",
+    "description": "Software subscriptions and SaaS platform fees"
+  },
+  {
+    "account_id": "6200",
+    "name": "Cloud & Hosting",
+    "description": "Cloud compute, storage, CDN, and hosting costs"
+  },
+  {
+    "account_id": "7200",
+    "name": "Local Transport",
+    "description": "Ride-hailing, taxi, and local transport"
+  }
+]
