@@ -16,7 +16,7 @@ def test_health_endpoint_returns_ok() -> None:
     assert response.json() == {"status": "ok", "service": "reap-cfo-agent"}
 
 
-def test_tag_endpoint_exists_as_placeholder() -> None:
+def test_tag_endpoint_rule_match_auto_tags() -> None:
     client = TestClient(app)
     payload = {
         "tx_id": "tx_001",
@@ -32,8 +32,79 @@ def test_tag_endpoint_exists_as_placeholder() -> None:
 
     response = client.post("/transactions/tag", json=payload)
 
-    assert response.status_code == 501
-    assert response.json()["detail"] == "Tagging pipeline not implemented yet."
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "AUTO_TAG"
+    assert data["source"] == "rule"
+    assert data["coa_account_id"] == "6100"
+    assert data["confidence"] == 1.0
+
+
+def test_tag_endpoint_no_rule_routes_to_unknown() -> None:
+    client = TestClient(app)
+    payload = {
+        "tx_id": "tx_002",
+        "tenant_id": "tenant_a",
+        "vendor_raw": "Unknown Vendor LLC",
+        "amount": "41.00",
+        "currency": "USD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": None,
+        "idempotency_key": "idem_002",
+    }
+
+    response = client.post("/transactions/tag", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "UNKNOWN"
+    assert data["source"] == "unknown"
+    assert data["coa_account_id"] is None
+
+
+def test_idempotency_returns_cached_result_for_same_payload() -> None:
+    client = TestClient(app)
+    payload = {
+        "tx_id": "tx_003",
+        "tenant_id": "tenant_a",
+        "vendor_raw": "Unknown Vendor LLC",
+        "amount": "41.00",
+        "currency": "USD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": None,
+        "idempotency_key": "idem_003",
+    }
+
+    first = client.post("/transactions/tag", json=payload)
+    second = client.post("/transactions/tag", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+
+
+def test_idempotency_key_conflict_when_payload_differs() -> None:
+    client = TestClient(app)
+    payload_a = {
+        "tx_id": "tx_004",
+        "tenant_id": "tenant_a",
+        "vendor_raw": "Unknown Vendor LLC",
+        "amount": "41.00",
+        "currency": "USD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": None,
+        "idempotency_key": "idem_004",
+    }
+    payload_b = {**payload_a, "amount": "42.00"}
+
+    first = client.post("/transactions/tag", json=payload_a)
+    second = client.post("/transactions/tag", json=payload_b)
+
+    assert first.status_code == 200
+    assert second.status_code == 409
 
 
 def test_load_app_config_reads_tenants() -> None:
