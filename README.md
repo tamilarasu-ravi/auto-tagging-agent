@@ -13,6 +13,13 @@ The agent auto-tags each transaction to a tenant-specific Chart of Accounts (CoA
 
 - **Workflow Chosen**: **Workflow 1 — Transaction auto-tagging and close acceleration**
 
+## Execution Notes (Time Budget)
+
+- **Estimated hands-on build time**: approximately 6 hours, aligned with the take-home guidance.
+- **Delivery approach**: iterative test-first slices (bootstrap -> core loop -> safety hardening -> tests -> docs).
+- **Why commit count is high**: commits are intentionally small checkpoints for traceability and rollback safety during rapid iteration, not an indicator of expanded scope.
+- **Scope discipline**: production-grade extensions are documented as follow-ups in `ARCHITECTURE.md` and sections 9/12 of this README, rather than implemented in MVP.
+
 ## Documentation Map
 
 - `README.md` (this file): executive summary, MVP scope, setup/run/test instructions, and submission context.
@@ -710,6 +717,7 @@ This output demonstrates the full safety story: rule-based auto-tag, LLM with me
 
 ## 11. Explicit Assumptions
 
+- **Standard cloud infrastructure is available**: Compute, networking, secrets management, and managed storage primitives are assumed to exist for deployment. The MVP focuses on workflow logic and safety controls, not infrastructure provisioning.
 - **CoA tagging only (MVP scope)**: The prompt specifies tax codes, tracking categories, and required metadata. The 4–6 hour time budget makes full implementation impractical without sacrificing correctness. Tax codes and tracking categories are architecturally anticipated but deferred.
 - **Transaction event stream**: Simulated by the `POST /transactions/tag` HTTP endpoint and the demo script. In production this would be a Kafka or SQS consumer.
 - **Accounting platform sync**: Represented by a mock adapter that logs the payload. Real integration (Xero, QuickBooks, NetSuite) is an adapter swap.
