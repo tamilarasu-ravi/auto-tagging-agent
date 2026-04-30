@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# MVP scope: SQLite file for idempotency. Swap with Postgres + UNIQUE constraint in production.
+
 import json
 import threading
 from pathlib import Path

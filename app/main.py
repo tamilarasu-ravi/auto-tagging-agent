@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException
 
 from app.adapters.accounting_sync import MockAccountingSyncAdapter
-from app.config import AppConfig, load_app_config
+from app.config import AppConfig, TenantConfig, load_app_config
 from app.models import (
     CoAAccount,
     ReviewQueueItem,
@@ -35,6 +36,15 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = APP_ROOT / "data" / "tenants.json"
 RUNTIME_DIR = APP_ROOT / "data" / "runtime"
 STATE_DB_PATH = RUNTIME_DIR / "state.db"
+
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Reap CFO Agent", version="0.1.0")
 app_config: AppConfig = load_app_config(CONFIG_PATH)
@@ -70,7 +80,7 @@ class TenantRoutingThresholds:
     auto_post_threshold: float
 
 
-def _resolve_tenant_routing_thresholds(tenant_cfg) -> TenantRoutingThresholds:
+def _resolve_tenant_routing_thresholds(tenant_cfg: TenantConfig) -> TenantRoutingThresholds:
     """Computes routing thresholds, applying cold-start auto-post tightening when enabled.
 
     Args:
@@ -122,10 +132,22 @@ def tag_transaction(
         if cached:
             cached_fingerprint, cached_result = cached
             if cached_fingerprint != payload_fingerprint:
+                logger.warning(
+                    "idempotency conflict tenant=%s tx=%s key=%s",
+                    transaction.tenant_id,
+                    transaction.tx_id,
+                    transaction.idempotency_key,
+                )
                 raise HTTPException(
                     status_code=409,
                     detail="idempotency_key already used with a different payload.",
                 )
+            logger.info(
+                "idempotency cache hit tenant=%s tx=%s key=%s",
+                transaction.tenant_id,
+                transaction.tx_id,
+                transaction.idempotency_key,
+            )
             return cached_result
 
         vendor_key = normalize_vendor(transaction.vendor_raw)
@@ -145,6 +167,13 @@ def tag_transaction(
             )
             audit_store.append(result)
             accounting_sync.sync(result)
+            logger.info(
+                "AUTO_TAG via rule tenant=%s tx=%s vendor_key=%s coa=%s",
+                transaction.tenant_id,
+                transaction.tx_id,
+                vendor_key,
+                rule.coa_account_id,
+            )
         else:
             tenant_id = transaction.tenant_id
             tenant_coa = coa_by_tenant[tenant_id]
@@ -180,6 +209,12 @@ def tag_transaction(
                     total_tokens=classification_result.total_tokens,
                 )
                 audit_store.append(result)
+                logger.warning(
+                    "UNKNOWN after classifier failure tenant=%s tx=%s reason=%s",
+                    tenant_id,
+                    transaction.tx_id,
+                    classification_result.error_reason,
+                )
             else:
                 classification = classification_result.output
                 valid_coa_ids = coa_ids_by_tenant[tenant_id]
@@ -197,6 +232,11 @@ def tag_transaction(
                         idempotency_key=transaction.idempotency_key,
                     )
                     audit_store.append(result)
+                    logger.warning(
+                        "UNKNOWN invalid CoA from classifier tenant=%s tx=%s",
+                        tenant_id,
+                        transaction.tx_id,
+                    )
                 else:
                     status = route_by_confidence(
                         classification.confidence,
@@ -222,7 +262,26 @@ def tag_transaction(
                     audit_store.append(result)
                     if status == "AUTO_TAG":
                         accounting_sync.sync(result)
+                        logger.info(
+                            "AUTO_TAG via classifier tenant=%s tx=%s coa=%s conf=%.2f "
+                            "thresholds review=%.2f auto_post=%.2f",
+                            tenant_id,
+                            transaction.tx_id,
+                            classification.coa_account_id,
+                            classification.confidence,
+                            routing_thresholds.review_threshold,
+                            routing_thresholds.auto_post_threshold,
+                        )
                     if status == "REVIEW_QUEUE":
+                        logger.info(
+                            "[Action] Routed to human review tenant=%s tx=%s confidence=%.2f "
+                            "(review_threshold=%.2f auto_post_threshold=%.2f)",
+                            tenant_id,
+                            transaction.tx_id,
+                            classification.confidence,
+                            routing_thresholds.review_threshold,
+                            routing_thresholds.auto_post_threshold,
+                        )
                         review_queue_store.add(
                             ReviewQueueItem(
                                 tx_id=transaction.tx_id,
@@ -233,6 +292,14 @@ def tag_transaction(
                                 reasoning=classification.reasoning,
                                 idempotency_key=transaction.idempotency_key,
                             )
+                        )
+                    if status == "UNKNOWN":
+                        logger.info(
+                            "[Action] Refused auto-post (low confidence or below review bar) "
+                            "tenant=%s tx=%s confidence=%.2f",
+                            tenant_id,
+                            transaction.tx_id,
+                            classification.confidence,
                         )
 
         idempotency_store.put(
@@ -330,6 +397,13 @@ def resolve_review_item(
             resolved_by=request.reviewer_id,
         )
         review_queue_store.save_resolution(request.tenant_id, tx_id, response)
+        logger.info(
+            "review resolved tenant=%s tx=%s action=%s rule_created=%s",
+            request.tenant_id,
+            tx_id,
+            request.action,
+            rule_created,
+        )
         return response
 
 

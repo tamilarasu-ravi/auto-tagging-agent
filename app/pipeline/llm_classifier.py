@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import os
 import re
 import time
@@ -9,6 +10,9 @@ from dataclasses import dataclass
 from typing import Callable
 
 from app.models import CoAAccount, LLMClassificationOutput, Transaction
+from app.pipeline.preprocessor import sanitize_ocr_text
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -33,8 +37,6 @@ class LLMClassificationResult:
 
 
 CompletionFn = Callable[..., object]
-EMAIL_RE = re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b")
-CARD_LAST4_RE = re.compile(r"\b\d{4}\b")
 
 
 class LLMClassifier:
@@ -83,6 +85,11 @@ class LLMClassifier:
             while True:
                 now = self._time_fn()
                 if now >= deadline:
+                    logger.warning(
+                        "LLM classification deadline exceeded tx=%s tenant=%s",
+                        transaction.tx_id,
+                        transaction.tenant_id,
+                    )
                     return LLMClassificationResult(
                         output=None,
                         provider_name=None,
@@ -119,6 +126,12 @@ class LLMClassifier:
                             continue
                         break
                     if status_code is not None and 400 <= status_code < 500:
+                        logger.warning(
+                            "LLM provider 4xx (no fallback) provider=%s tx=%s status=%s",
+                            provider.name,
+                            transaction.tx_id,
+                            status_code,
+                        )
                         return LLMClassificationResult(
                             output=None,
                             provider_name=provider.name,
@@ -126,6 +139,11 @@ class LLMClassifier:
                         )
                     break
 
+        logger.warning(
+            "LLM providers exhausted or unreachable tx=%s tenant=%s",
+            transaction.tx_id,
+            transaction.tenant_id,
+        )
         return LLMClassificationResult(
             output=None,
             provider_name=None,
@@ -216,16 +234,6 @@ def _build_messages(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-
-
-def sanitize_ocr_text(ocr_text: str | None) -> str:
-    """Redacts obvious PII patterns from OCR text before prompt construction."""
-    if not ocr_text:
-        return "Not available"
-
-    sanitized = EMAIL_RE.sub("[REDACTED_EMAIL]", ocr_text)
-    sanitized = CARD_LAST4_RE.sub("[REDACTED_4DIGITS]", sanitized)
-    return sanitized
 
 
 def _parse_response_output(response: object) -> LLMClassificationOutput:

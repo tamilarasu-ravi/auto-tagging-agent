@@ -7,10 +7,7 @@ from app.pipeline.llm_classifier import (  # pylint: disable=no-name-in-module
     LLMClassifier,
     ProviderConfig,
     classify_transaction_no_llm,
-    sanitize_ocr_text,
 )
-
-
 @dataclass
 class DummyError(Exception):
     status_code: int | None
@@ -116,16 +113,6 @@ def test_llm_classifier_exhausted_chain_returns_unknown_reason() -> None:
 
     assert result.output is None
     assert result.error_reason == "providers_exhausted"
-
-
-def test_sanitize_ocr_text_masks_email_and_card_last4_patterns() -> None:
-    raw = "john.doe@example.com paid with card ending 1234 and ref 9876."
-    sanitized = sanitize_ocr_text(raw)
-
-    assert "john.doe@example.com" not in sanitized
-    assert "[REDACTED_EMAIL]" in sanitized
-    assert "1234" not in sanitized
-    assert "9876" not in sanitized
 
 
 def test_llm_classifier_parses_json_wrapped_in_extra_text() -> None:

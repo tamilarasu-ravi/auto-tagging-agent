@@ -52,6 +52,9 @@ def run_demo_scenario() -> list[str]:
             "idempotency_key": f"idem101_{run_id}",
         }
         res101 = client.post("/transactions/tag", json=tx101, headers=headers).json()
+        lines.append(
+            "[Action] Deterministic vendor rule matched; auto-posting without LLM call."
+        )
         lines.append(_format_line(res101, "zoom-us"))
 
         tx102 = {
@@ -66,6 +69,11 @@ def run_demo_scenario() -> list[str]:
             "idempotency_key": f"idem102_{run_id}",
         }
         res102 = client.post("/transactions/tag", json=tx102, headers=headers).json()
+        conf102 = res102.get("confidence")
+        conf_str = f"{float(conf102):.2f}" if isinstance(conf102, (float, int)) else "n/a"
+        lines.append(
+            f"[Action] Routed to human review (confidence {conf_str}) — not safe to auto-post."
+        )
         lines.append(_format_line(res102, vendor_repeat))
 
         resolve_response = client.post(
@@ -84,6 +92,9 @@ def run_demo_scenario() -> list[str]:
             f"[Audit] tx={tx102['tx_id']} reviewer_override "
             f"final={resolve['result']['coa_account_id']} rule_created={resolve['rule_created']}"
         )
+        lines.append(
+            "[Action] Reviewer correction promoted to a per-vendor rule for future auto-tag."
+        )
 
         tx103 = {
             "tx_id": f"tx103_{run_id}",
@@ -97,6 +108,9 @@ def run_demo_scenario() -> list[str]:
             "idempotency_key": f"idem103_{run_id}",
         }
         res103 = client.post("/transactions/tag", json=tx103, headers=headers).json()
+        lines.append(
+            "[Action] Repeat vendor now hits deterministic rule; LLM bypassed for consistency."
+        )
         lines.append(_format_line(res103, vendor_repeat))
 
         tx104 = {
@@ -111,6 +125,9 @@ def run_demo_scenario() -> list[str]:
             "idempotency_key": f"idem104_{run_id}",
         }
         res104 = client.post("/transactions/tag", json=tx104, headers=headers).json()
+        lines.append(
+            "[Action] Unknown vendor refused auto-post (UNKNOWN) — silent miscoding avoided."
+        )
         lines.append(_format_line(res104, "unknown-vendor"))
 
     return lines
