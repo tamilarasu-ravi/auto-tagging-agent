@@ -11,7 +11,9 @@ The agent auto-tags each transaction to a tenant-specific Chart of Accounts (CoA
 
 ## Candidate Info
 
-- **Workflow Chosen**: **Workflow 1 — Transaction auto-tagging and close acceleration**
+- **Workflow chosen**: **Workflow 1 — Transaction auto-tagging and close acceleration**
+- **Why this workflow**: high operational leverage during month-end close, clear safety boundaries, and measurable business impact (automation rate, review rate, close-time reduction).
+- **Implementation intent**: deliver a correctness-first MVP that is runnable end-to-end now and explicit about what must change before production rollout.
 
 ## Execution Notes (Time Budget)
 
@@ -662,6 +664,8 @@ API docs available at `http://localhost:8000/docs`.
 ```bash
 pytest
 ```
+
+Note: test runs are intentionally deterministic. `tests/conftest.py` forces `LLM_ENABLE_LIVE_CALLS=false` so pytest results remain stable even if your shell or `.env` enables live provider calls.
 
 If your environment does not pick up `pytest.ini` for some reason, this also works:
 
