@@ -41,6 +41,8 @@ BASE_URL="http://127.0.0.1:8011" AUTO_START_SERVER=true SMOKE_LLM_ENABLE_LIVE_CA
 - Advanced DLP/NER for all PII classes (current redaction is regex-focused).
 - Retrieval-based few-shot selection (current approach samples tenant-confirmed examples).
 
+**Why retrieval is deferred in this MVP**: the take-home is intentionally time-boxed and safety-critical. This implementation prioritizes deterministic correctness gates (tenant CoA validation, confidence routing, idempotency, auditability) before introducing a retrieval layer. Retrieval is planned as the first quality upgrade once the baseline safety loop is validated.
+
 ## Production Migration Plan (Current -> Target)
 
 | Area               | Current MVP                      | Production Target                                    | Migration Trigger                                  |
@@ -550,6 +552,22 @@ Design rationale and trade-off depth (provider semantics, abstraction boundaries
 
 Canonical production architecture direction is in `ARCHITECTURE.md` (**7) MVP vs Production Boundary** and **8) Open Production Architecture Questions**.
 
+### Observability & Debug Replay (implementation-oriented)
+
+For each tagging decision, capture enough context to replay and diagnose outcomes quickly:
+
+- **Trace identifiers**: `tx_id`, `tenant_id`, `idempotency_key`, timestamp.
+- **Decision path**: `source` (`rule` / `llm` / `unknown`), final `status`, `confidence`, `coa_account_id`.
+- **LLM attribution**: `provider_name`, `latency_ms`, `prompt_tokens`, `completion_tokens`, `total_tokens` (when live provider calls are used).
+- **Failure reasoning**: validator/router/provider error category (for example `provider_4xx`, invalid CoA, below threshold).
+
+**Debug replay workflow (MVP):**
+
+1. Look up the record in `/audit-log/{tenant_id}` by `tx_id`.
+2. Verify whether it came from deterministic rule path or classifier path (`source` + `provider_name`).
+3. Re-run the same payload with a new `idempotency_key` in local/dev to reproduce behavior (or confirm idempotency replay behavior with the same key).
+4. Use classifier/provider logs for upstream 4xx/5xx diagnostics when `source="unknown"` with provider errors.
+
 ### Must-haves before production
 
 - **Immutable audit log**: every decision written to an append-only store with `tx_id`, `timestamp`, `source`, `confidence`, `coa_account_id`, and `reasoning`. No record is ever updated — corrections create new records.
@@ -568,7 +586,8 @@ Canonical production architecture direction is in `ARCHITECTURE.md` (**7) MVP vs
 - **Tenant isolation**: every data access (CoA, rules, audit log, review queue) is scoped by `tenant_id` with server-side enforcement. A tenant must never be able to read or influence another tenant's data, rules, or audit trail — enforced at the repository layer, not just the API layer.
 - **Review resolve route hardening (HIGH before external multi-tenant rollout)**: current resolve route carries `tenant_id` in request body (`POST /review-queue/{tx_id}/resolve`). Before real multi-tenant exposure, move tenant scope into the path (`POST /tenants/{tenant_id}/review-queue/{tx_id}/resolve`) and keep server-side tenant ownership checks.
 - **Rate limiting**: protect the LLM call path from burst traffic; queue overflow to REVIEW rather than dropping.
-- **Per-tenant LLM spend cap**: a configurable monthly token budget per tenant; transactions arriving after the cap is reached are routed to `REVIEW_QUEUE` rather than triggering LLM calls, preventing runaway costs for high-volume or misconfigured tenants.
+- **Per-tenant LLM spend cap**: a configurable monthly token budget per tenant; transactions arriving after the cap is reached are routed to `REVIEW_QUEUE` rather than triggering LLM calls, preventing runaway costs for high-volume or misconfigured tenants.  
+  _Status in this MVP_: planned and documented, not yet enforced in runtime code.
 - **Confidence calibration operations**: run eval harness as a weekly CI job (non-blocking) and assign ownership to ML/platform on-call. If Brier score rises above `0.08`, block threshold/model changes and run a recalibration pass (Platt scaling or isotonic regression) before release.
 
 ### Next-step architecture (post-MVP)
