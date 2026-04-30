@@ -4,6 +4,7 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://localhost:8000}"
 TENANT_A_KEY="${TENANT_A_KEY:-demo_key_tenant_a}"
 TENANT_B_KEY="${TENANT_B_KEY:-demo_key_tenant_b}"
+AUTO_START_SERVER="${AUTO_START_SERVER:-true}"
 
 if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required."
@@ -69,7 +70,68 @@ get_json() {
     -H "X-API-Key: ${api_key}"
 }
 
+health_ok() {
+  curl -sS "${BASE_URL}/health" >/dev/null 2>&1
+}
+
+wait_for_health() {
+  local timeout_s="${1:-10}"
+  local start_ts
+  start_ts="$(python3 - <<'PY'
+import time
+print(time.time())
+PY
+)"
+
+  while ! health_ok; do
+    local now_ts
+    now_ts="$(python3 - <<'PY'
+import time
+print(time.time())
+PY
+)"
+    if python3 - <<PY
+import sys
+start=float("${start_ts}")
+now=float("${now_ts}")
+timeout=float("${timeout_s}")
+sys.exit(0 if (now-start) <= timeout else 1)
+PY
+    then
+      sleep 0.2
+      continue
+    fi
+    return 1
+  done
+  return 0
+}
+
+SERVER_PID=""
+cleanup_server() {
+  if [[ -n "${SERVER_PID}" ]]; then
+    kill "${SERVER_PID}" >/dev/null 2>&1 || true
+    wait "${SERVER_PID}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_server EXIT
+
 echo "Running smoke tests against ${BASE_URL} (run_id=${RUN_ID})"
+
+if ! health_ok; then
+  if [[ "${AUTO_START_SERVER}" == "true" ]]; then
+    echo "No server detected at ${BASE_URL}. Starting uvicorn for smoke tests..."
+    # Run server in background for smoke tests only.
+    python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning >/tmp/reap_smoke_${RUN_ID}.log 2>&1 &
+    SERVER_PID="$!"
+    if ! wait_for_health 15; then
+      echo "FAIL: server did not become healthy in time. See /tmp/reap_smoke_${RUN_ID}.log"
+      exit 1
+    fi
+  else
+    echo "FAIL: could not reach ${BASE_URL}. Start the server first or set AUTO_START_SERVER=true."
+    exit 1
+  fi
+fi
 
 # 1) Rule hit
 RULE_RESP="$(post_json "/transactions/tag" "${TENANT_A_KEY}" "{
@@ -124,7 +186,7 @@ POST_PROMOTE_RESP="$(post_json "/transactions/tag" "${TENANT_A_KEY}" "{
 assert_eq "$(json_field "${POST_PROMOTE_RESP}" "source")" "rule" "post-promotion rule source"
 assert_eq "$(json_field "${POST_PROMOTE_RESP}" "status")" "AUTO_TAG" "post-promotion status"
 
-# 5) tenant_b safety check (invalid mapped account -> UNKNOWN)
+# 5) tenant_b safety check (cold-start should avoid auto-posting)
 TENANT_B_RESP="$(post_json "/transactions/tag" "${TENANT_B_KEY}" "{
   \"tx_id\": \"smoke_tenant_b_${RUN_ID}\",
   \"tenant_id\": \"tenant_b\",
@@ -136,7 +198,7 @@ TENANT_B_RESP="$(post_json "/transactions/tag" "${TENANT_B_KEY}" "{
   \"ocr_text\": null,
   \"idempotency_key\": \"smoke_idem_tenant_b_${RUN_ID}\"
 }")"
-assert_eq "$(json_field "${TENANT_B_RESP}" "status")" "UNKNOWN" "tenant_b safe refusal"
+assert_eq "$(json_field "${TENANT_B_RESP}" "status")" "REVIEW_QUEUE" "tenant_b conservative review (cold start)"
 
 # 6) Auth check
 AUTH_STATUS="$(curl -sS -o /tmp/smoke_auth_${RUN_ID}.json -w "%{http_code}" \

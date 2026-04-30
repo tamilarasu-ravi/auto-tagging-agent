@@ -453,6 +453,44 @@ def test_tenant_auth_rejects_invalid_api_key() -> None:
     assert response.status_code == 403
 
 
+def test_tag_endpoint_rejects_overlong_vendor_raw() -> None:
+    client = TestClient(app)
+    payload = {
+        "tx_id": "manual_vendor_len_001",
+        "tenant_id": "tenant_a",
+        "vendor_raw": "X" * 501,
+        "amount": "20.00",
+        "currency": "USD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": None,
+        "idempotency_key": _unique_key("idem_vendor_len_001"),
+    }
+
+    response = client.post("/transactions/tag", json=payload, headers=_headers("tenant_a"))
+
+    assert response.status_code == 422
+
+
+def test_tag_endpoint_rejects_overlong_ocr_text() -> None:
+    client = TestClient(app)
+    payload = {
+        "tx_id": "manual_ocr_len_001",
+        "tenant_id": "tenant_a",
+        "vendor_raw": "AWS Marketplace",
+        "amount": "20.00",
+        "currency": "USD",
+        "date": "2026-04-29",
+        "transaction_type": "card",
+        "ocr_text": "x" * 2001,
+        "idempotency_key": _unique_key("idem_ocr_len_001"),
+    }
+
+    response = client.post("/transactions/tag", json=payload, headers=_headers("tenant_a"))
+
+    assert response.status_code == 422
+
+
 def test_load_app_config_reads_tenants() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     config = load_app_config(repo_root / "data" / "tenants.json")

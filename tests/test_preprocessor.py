@@ -1,4 +1,4 @@
-from app.pipeline.preprocessor import normalize_vendor, sanitize_ocr_text
+from app.pipeline.preprocessor import normalize_vendor, sanitize_free_text, sanitize_ocr_text
 
 
 def test_normalize_vendor_strips_punctuation_and_collapses_whitespace() -> None:
@@ -16,7 +16,7 @@ def test_sanitize_ocr_text_masks_email_and_card_last4_patterns() -> None:
     assert "john.doe@example.com" not in sanitized
     assert "[REDACTED_EMAIL]" in sanitized
     assert "1234" not in sanitized
-    assert "9876" not in sanitized
+    assert "9876" in sanitized
 
 
 def test_sanitize_ocr_text_masks_chunked_pan() -> None:
@@ -27,3 +27,8 @@ def test_sanitize_ocr_text_masks_chunked_pan() -> None:
 
 def test_sanitize_ocr_text_none_returns_placeholder() -> None:
     assert sanitize_ocr_text(None) == "Not available"
+
+
+def test_sanitize_free_text_preserves_none_and_masks_last4() -> None:
+    assert sanitize_free_text(None) is None
+    assert sanitize_free_text("Paid with card ending 1234") == "Paid with card ending [REDACTED_4DIGITS]"

@@ -28,6 +28,7 @@ The agent auto-tags each transaction to a tenant-specific Chart of Accounts (CoA
 9. [Production-Readiness Considerations](#9-production-readiness-considerations)
 10. [How to Run the MVP](#10-how-to-run-the-mvp)
 11. [Explicit Assumptions](#11-explicit-assumptions)
+12. [Open Questions for Production Scaling (Post-MVP)](#12-open-questions-for-production-scaling-post-mvp)
 
 ---
 
@@ -113,14 +114,21 @@ The agent is built around a **hybrid decision system**:
 
 ```
 auto-tagging-agent/
+├── ARCHITECTURE.md              # MVP vs production boundary table
 ├── app/
-│   ├── main.py                  # FastAPI entrypoint
+│   ├── main.py                  # FastAPI wiring (routes delegate to services)
 │   ├── models.py                # Pydantic schemas (Transaction, CoAAccount, LLMOutput, etc.)
 │   ├── config.py                # Tenant config loader (thresholds, CoA, rules)
+│   ├── services/
+│   │   └── tagging_service.py   # Tag + resolve orchestration (rule-first, classifier, audit)
 │   ├── pipeline/
-│   │   ├── preprocessor.py      # Vendor normalization, enrichment
+│   │   ├── preprocessor.py      # Vendor normalization; OCR PII redaction for prompts
 │   │   ├── rule_engine.py       # Deterministic vendor→CoA matching
-│   │   ├── llm_classifier.py    # Prompt construction + multi-provider LLM call via LiteLLM (Gemini → Claude → OpenAI)
+│   │   ├── llm_classifier.py    # Classifier facade (fallback chain + deterministic path)
+│   │   ├── llm_prompt.py        # Chat message construction for LiteLLM
+│   │   ├── llm_provider.py      # Provider chain env + HTTP completion + response parse
+│   │   ├── llm_fallback.py      # No-LLM deterministic CoA scoring
+│   │   ├── llm_types.py         # ProviderConfig / LLMClassificationResult
 │   │   ├── validator.py         # Output schema + CoA membership validation
 │   │   └── router.py            # Confidence-based routing
 │   ├── store/
@@ -606,6 +614,7 @@ Note: `tenant_b` is configured with `cold_start: true`, which raises the effecti
 - **Immutable audit log**: every decision written to an append-only store with `tx_id`, `timestamp`, `source`, `confidence`, `coa_account_id`, and `reasoning`. No record is ever updated — corrections create new records.
 - **Idempotency**: transactions are deduplicated by `idempotency_key` before entering the pipeline. Safe to retry on network failure.
 - **PII stripping**: strip cardholder name, last 4 digits, and any personal identifiers from the `ocr_text` field before the LLM call.
+- **Input guardrails**: enforce request-size limits before prompt construction (`vendor_raw` max 500 chars, `ocr_text` max 2000 chars) to prevent malformed payload amplification and provider-side 4xx churn.
 - **Observability per tenant**:
   - Auto-tag rate (trending)
   - Review rate (trending)
@@ -616,6 +625,7 @@ Note: `tenant_b` is configured with `cold_start: true`, which raises the effecti
 - **Tenant isolation**: every data access (CoA, rules, audit log, review queue) is scoped by `tenant_id` with server-side enforcement. A tenant must never be able to read or influence another tenant's data, rules, or audit trail — enforced at the repository layer, not just the API layer.
 - **Rate limiting**: protect the LLM call path from burst traffic; queue overflow to REVIEW rather than dropping.
 - **Per-tenant LLM spend cap**: a configurable monthly token budget per tenant; transactions arriving after the cap is reached are routed to `REVIEW_QUEUE` rather than triggering LLM calls, preventing runaway costs for high-volume or misconfigured tenants.
+- **Confidence calibration operations**: re-run the eval harness at least monthly; if Brier score rises above `0.08`, block threshold/model changes and run a recalibration pass (Platt scaling or isotonic regression) before release.
 
 ### Next-step architecture (post-MVP)
 
@@ -743,7 +753,20 @@ This output demonstrates the full safety story: rule-based auto-tag, LLM with me
 - **Vendor rules are keyed by normalized vendor string**: Lowercased, whitespace collapsed, punctuation stripped. E.g., `"AWS Marketplace, Inc."` → `"aws marketplace inc"`. Fuzzy matching is a next-step improvement.
 - **Few-shot examples are sampled from confirmed tenant history**: For the MVP, up to 5 examples are selected randomly. In production, retrieval-based selection (most similar vendor category) is better.
 - **Storage is local JSON seed files + SQLite runtime state**: sufficient for a take-home MVP demo; production storage choices are documented in §9.
+- **Deployment mode for this MVP is single-process only**: in-process `RLock` + SQLite file locking protects correctness for local/demo runs, but is not a substitute for distributed concurrency control across multiple workers/replicas.
 - **Single primary LLM call per transaction**: fallback providers are only invoked if the primary errors or times out. For the MVP's narrow scope (CoA tagging only), a single well-structured prompt is sufficient; in the worst case (all prior providers fail) up to 3 calls are made, each with the same prompt and schema.
 - **Rule writes are idempotent on `(tenant_id, vendor_key)`**: if two transactions for the same new vendor arrive simultaneously and both trigger reviewer corrections concurrently, the second write is a no-op (last-write-wins on an identical key). This prevents duplicate rule entries and makes the rule store safe under concurrent correction.
 - **No PII in demo data**: Demo fixtures use synthetic data. PII scrubbing is listed as a production must-have in §9.
+
+---
+
+## 12. Open Questions for Production Scaling (Post-MVP)
+
+If this MVP were moving to production, I would align with product, security, and platform teams on the following decisions before rollout:
+
+1. **Data isolation boundaries**: Are we permitted to cross-pollinate anonymized retrieval embeddings across tenants to improve cold-start performance globally, or do compliance obligations require strictly siloed retrieval spaces per tenant?
+2. **Downstream sync burst handling**: During month-end close spikes, what is the queuing and retry strategy (for example SQS/Kafka + DLQ + exponential backoff) for accounting platform APIs (Xero/NetSuite/QuickBooks) that enforce tight rate limits?
+3. **Authorization vs settlement lifecycle**: Should classification run at authorization, settlement, or both? If merchant descriptors change at settlement, do we re-evaluate and can settlement overwrite a prior human-reviewed decision?
+4. **Review queue concurrency model**: When multiple accountants resolve items concurrently, what optimistic-locking contract should the API enforce (for example version checks with `409 Conflict`) to prevent double-resolution races?
+5. **Multi-dimensional accounting constraints**: When tax codes and tracking categories are introduced, are there strict dependencies between CoA accounts and allowable metadata values? If yes, prompt constraints and output validation should enforce relational validity, not just field-level schema validity.
 

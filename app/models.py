@@ -6,16 +6,19 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+MAX_VENDOR_RAW_LEN = 500
+MAX_OCR_TEXT_LEN = 2000
+
 
 class Transaction(BaseModel):
     tx_id: str
     tenant_id: str
-    vendor_raw: str
+    vendor_raw: str = Field(min_length=1, max_length=MAX_VENDOR_RAW_LEN)
     amount: Decimal
     currency: str
     date: date
     transaction_type: Literal["card", "bill"]
-    ocr_text: str | None = None
+    ocr_text: str | None = Field(default=None, max_length=MAX_OCR_TEXT_LEN)
     idempotency_key: str
 
 
