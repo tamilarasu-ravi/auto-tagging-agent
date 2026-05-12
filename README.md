@@ -1,6 +1,6 @@
-# Reap AI-CFO — Workflow 1: Transaction Auto-Tagging Agent
+# AI-CFO — Transaction Auto-Tagging Agent
 
-An MVP prototype for **Workflow 1 — Transaction auto-tagging and close acceleration** from the Reap take-home prompt.
+An MVP prototype for **Transaction auto-tagging and close acceleration**.
 
 The agent auto-tags each transaction to a tenant-specific Chart of Accounts (CoA), enforcing one non-negotiable safety constraint:
 
