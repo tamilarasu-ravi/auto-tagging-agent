@@ -24,8 +24,9 @@ The agent auto-tags each transaction to a tenant-specific Chart of Accounts (CoA
 
 ## Documentation Map
 
-- `README.md` (this file): executive summary, MVP scope, setup/run/test instructions, and submission context.
+- `README.md` (this file): executive summary, MVP scope, setup/run/test instructions, submission context, and [post-MVP implementation plan](#post-mvp-implementation-plan).
 - `ARCHITECTURE.md`: canonical system design, invariants, API architecture contracts, failure-mode handling, and MVP-vs-production boundary decisions.
+- `docs/HOW_IT_WORKS.md`, `docs/FLOW_TENANT_A.md`, `docs/FLOW_TENANT_B.md`, `docs/RULES_LLM_AND_DATABASE.md`: deeper implementation walkthroughs.
 
 ## Quick 5-Min Verify
 
@@ -63,6 +64,86 @@ BASE_URL="http://127.0.0.1:8011" AUTO_START_SERVER=true SMOKE_LLM_ENABLE_LIVE_CA
 | Retrieval quality  | Random tenant few-shot sampling  | Retrieval-based similarity examples (e.g., pgvector) | Long-tail performance plateau in eval metrics      |
 | Observability      | Application logs                 | Metrics/traces/alerts (OpenTelemetry)                | On-call ownership and SLO commitments              |
 
+## Post-MVP implementation plan
+
+Phased roadmap after the MVP: **tenant-scoped retrieval (RAG)**, **MCP-backed tools**, and a **bounded single-agent loop**—without replacing the existing safety spine (**rule → classify → validate CoA → confidence route → audit / review / idempotency**). RAG and tools *feed* classification; they do not bypass validation or routing.
+
+### North star and principles
+
+- **North star:** improve long-tail tagging quality without weakening CoA validation, confidence routing, idempotency, or auditability.
+- **Spine unchanged:** terminal decisions remain behind the same gates (invalid or out-of-CoA output → `UNKNOWN`; low confidence → `REVIEW_QUEUE` / `UNKNOWN`).
+- **Tenant isolation:** every retrieval query and index partition is scoped by `tenant_id` server-side.
+- **Observability:** log tool name, latency, and truncated args—not raw chain-of-thought; keep `reasoning` short and sanitized as today.
+
+### Phase 0 — Baseline and eval gates (1–2 days)
+
+- Capture current metrics from `tests/eval/eval_runner.py` and `pytest` for `tenant_a` / `tenant_b`.
+- Add a small **golden eval set** (20–50 cases: vendor, tenant, expected status, and CoA when `AUTO_TAG`).
+- Define regression gates (e.g. auto-tag precision on golden set must not drop; review/unknown rates within agreed bounds).
+
+**Exit:** baseline numbers recorded; CI or local script can run the golden set before/after each phase.
+
+### Phase 1 — Retrieval data model (2–4 days)
+
+- Persist each human-confirmed final label as a **retrievable row**: e.g. `tenant_id`, `vendor_key`, optional amount bucket / `currency` / `transaction_type`, `final_coa_account_id`, provenance (`review_accept` / `review_correct` / import), timestamps, optional `tx_id`.
+- **Write path:** extend review resolve (and any path that produces a trusted final CoA) to upsert this corpus.
+- **Read path:** internal query API only (no change to default tagging behaviour until Phase 2).
+
+**Exit:** corpus grows from real resolutions; optional backfill from existing `confirmed_example` rows if desired.
+
+### Phase 2 — Vanilla RAG (4–7 days)
+
+- Build a deterministic **embedding text** (e.g. tenant + normalized vendor + currency + type + optional sanitized OCR snippet).
+- Add a **vector index** (dev: SQLite + vector extension or small pgvector table; production target: Postgres + pgvector per `ARCHITECTURE.md`).
+- Implement `retrieve_examples(tenant_id, query_text, k=5, exclude_vendor_key=...)` with strict tenant filter.
+- **Integrate:** replace or augment `ConfirmedExampleStore.sample_examples` in `TaggingService` / classifier path with retrieved examples; keep feature flag (e.g. `EXAMPLE_SOURCE=random|rag`, `RETRIEVAL_ENABLED`).
+
+**Exit:** eval shows measurable long-tail improvement or document “no regression” with flag default safe.
+
+### Phase 3 — MCP: one tool, one server (3–5 days)
+
+- Expose **one** MCP tool first, e.g. `search_similar_tagged_transactions`, implemented as a thin wrapper over the same `retrieve_examples` used in Phase 2 (single code path).
+- Tool returns **structured JSON** only (e.g. list of `{ vendor_key, coa_account_id, score, ... }`).
+
+**Exit:** demo host (e.g. Python MCP server under `mcp/`) can call retrieval; classifier schema and CoA validation unchanged.
+
+### Phase 4 — Single tool-using agent loop (5–10 days)
+
+- **Bounded loop** (e.g. max 3 tool calls, overall timeout): optional retrieve → optional read-only CoA listing → **final** structured classification JSON.
+- On tool failure or malformed tool output: fall back to classifier-without-tool or `UNKNOWN` per policy.
+- Persist **tool traces** (audit or `agent_trace` table): tool name, latency, redacted args—not full CoT.
+
+**Exit:** end-to-end path behind a second flag; compare metrics to Phase 2.
+
+### Phase 5 — Advanced RAG (as needed)
+
+Apply **one** improvement at a time; re-run golden eval after each:
+
+- Metadata pre-filter (currency, `transaction_type`) before vector search.
+- Re-ranker on top-20 → top-5.
+- Query expansion only if eval shows systematic retrieval misses.
+
+**Exit:** each change passes the same regression gates.
+
+### Phase 6 — Multi-agent (optional, later)
+
+Consider only when responsibilities split cleanly (e.g. retrieval vs policy vs classification) and a single orchestrator becomes unwieldy. Requires separate budgets, timeouts, merged trace, and **one** validator at the end.
+
+### Suggested merge order (PR-sized)
+
+1. Golden eval set + gate script (no retrieval).
+2. Retrieval store + embed pipeline + internal API (feature off).
+3. Wire RAG into prompt behind flag + tests.
+4. MCP server calling the internal API.
+5. Bounded agent loop behind a separate flag.
+
+### Definition of done (initiative)
+
+- Golden eval: no regression on safety-critical cases.
+- Long-tail: measurable improvement **or** documented negative result with data.
+- RAG: tenant isolation proven by tests.
+- MCP / agent: bounded cost and latency; auditable tool usage; unchanged output schema and validator.
+
 ## Known Risks & Mitigations
 
 - **Live provider availability**: upstream model/key issues can produce 4xx/5xx.  
@@ -92,6 +173,7 @@ BASE_URL="http://127.0.0.1:8011" AUTO_START_SERVER=true SMOKE_LLM_ENABLE_LIVE_CA
 10. [How to Run the MVP](#10-how-to-run-the-mvp)
 11. [Explicit Assumptions](#11-explicit-assumptions)
 12. [Open Questions for Production Scaling (Post-MVP)](#12-open-questions-for-production-scaling-post-mvp)
+13. [Post-MVP implementation plan](#post-mvp-implementation-plan)
 
 ---
 
