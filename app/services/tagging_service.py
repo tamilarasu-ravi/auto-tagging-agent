@@ -18,6 +18,7 @@ from app.models import (
     ReviewQueueItem,
     ReviewResolveRequest,
     ReviewResolveResponse,
+    RetrievalCorpusInsert,
     TaggingResult,
     Transaction,
     VendorRule,
@@ -29,6 +30,7 @@ from app.pipeline.validator import validate_classification_output
 from app.store.audit_log import AuditLogStore
 from app.store.confirmed_example_store import ConfirmedExampleStore
 from app.store.idempotency_store import IdempotencyStore
+from app.store.retrieval_corpus_store import RetrievalCorpusStore
 from app.store.review_queue import ReviewQueueStore
 from app.store.rule_store import RuleStore
 
@@ -102,6 +104,7 @@ class TaggingService:
         idempotency_store: IdempotencyStore,
         review_queue_store: ReviewQueueStore,
         confirmed_example_store: ConfirmedExampleStore,
+        retrieval_corpus_store: RetrievalCorpusStore,
         processing_lock: threading.RLock,
     ) -> None:
         self._app_config = app_config
@@ -114,6 +117,7 @@ class TaggingService:
         self._idempotency_store = idempotency_store
         self._review_queue_store = review_queue_store
         self._confirmed_example_store = confirmed_example_store
+        self._retrieval_corpus_store = retrieval_corpus_store
         self._processing_lock = processing_lock
 
     def _ensure_tenant_exists(self, tenant_id: str) -> None:
@@ -297,6 +301,11 @@ class TaggingService:
                                     confidence=classification.confidence,
                                     reasoning=sanitized_reasoning,
                                     idempotency_key=transaction.idempotency_key,
+                                    vendor_raw=transaction.vendor_raw,
+                                    amount=str(transaction.amount),
+                                    currency=transaction.currency,
+                                    transaction_date=transaction.date,
+                                    transaction_type=transaction.transaction_type,
                                 )
                             )
                         if status == "UNKNOWN":
@@ -365,6 +374,22 @@ class TaggingService:
                     "action": request.action,
                 },
             )
+            corpus_row = RetrievalCorpusInsert(
+                tenant_id=request.tenant_id,
+                tx_id=queued_item.tx_id,
+                vendor_key=queued_item.vendor_key,
+                vendor_raw=queued_item.vendor_raw,
+                amount=queued_item.amount,
+                currency=queued_item.currency,
+                transaction_date=queued_item.transaction_date,
+                transaction_type=queued_item.transaction_type,
+                final_coa_account_id=request.final_coa_account_id,
+                suggested_coa_account_id=queued_item.suggested_coa_account_id,
+                confidence=queued_item.confidence,
+                resolution_action=request.action,
+                idempotency_key=queued_item.idempotency_key,
+            )
+            self._retrieval_corpus_store.insert(corpus_row)
             rule_created = False
             if request.action == "correct":
                 promoted_rule = VendorRule(

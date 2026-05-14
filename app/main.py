@@ -13,6 +13,7 @@ from app.models import (
     CoAAccount,
     ReviewResolveRequest,
     ReviewResolveResponse,
+    RetrievalCorpusDocument,
     TaggingResult,
     Transaction,
 )
@@ -21,6 +22,7 @@ from app.services.tagging_service import TaggingService
 from app.store.audit_log import AuditLogStore
 from app.store.confirmed_example_store import ConfirmedExampleStore
 from app.store.idempotency_store import IdempotencyStore
+from app.store.retrieval_corpus_store import RetrievalCorpusStore
 from app.store.review_queue import ReviewQueueStore
 from app.store.rule_store import RuleStore
 
@@ -45,6 +47,7 @@ accounting_sync = MockAccountingSyncAdapter()
 idempotency_store = IdempotencyStore(STATE_DB_PATH)
 review_queue_store = ReviewQueueStore(STATE_DB_PATH)
 confirmed_example_store = ConfirmedExampleStore(STATE_DB_PATH)
+retrieval_corpus_store = RetrievalCorpusStore(STATE_DB_PATH)
 processing_lock = threading.RLock()
 
 coa_by_tenant: dict[str, list[CoAAccount]] = {}
@@ -74,6 +77,7 @@ tagging_service = TaggingService(
     idempotency_store=idempotency_store,
     review_queue_store=review_queue_store,
     confirmed_example_store=confirmed_example_store,
+    retrieval_corpus_store=retrieval_corpus_store,
     processing_lock=processing_lock,
 )
 
@@ -91,6 +95,18 @@ def _authorize_tenant_request(tenant_id: str, api_key: str | None) -> None:
 def health() -> dict[str, str]:
     """Returns a basic service health response."""
     return {"status": "ok", "service": "reap-cfo-agent"}
+
+
+@app.get("/corpus/{tenant_id}")
+def get_retrieval_corpus(
+    tenant_id: str,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    limit: int = 200,
+    offset: int = 0,
+) -> list[RetrievalCorpusDocument]:
+    """Returns persisted retrieval-corpus rows for one tenant (Phase 1 read API)."""
+    _authorize_tenant_request(tenant_id, x_api_key)
+    return retrieval_corpus_store.list_by_tenant(tenant_id, limit=limit, offset=offset)
 
 
 @app.post("/transactions/tag")

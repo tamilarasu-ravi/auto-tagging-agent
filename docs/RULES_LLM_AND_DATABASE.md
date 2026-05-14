@@ -145,6 +145,7 @@ All these stores share the **`STATE_DB_PATH`** configured in **`app/main.py`** (
 | **`IdempotencyStore`** | `idempotency` — **PK `(tenant_id, idempotency_key)`** | Caches **`TaggingResult`** + payload fingerprint so retries are safe; conflict → HTTP **409**. |
 | **`ReviewQueueStore`** | `review_queue`; `review_resolution` | Pending **`REVIEW_QUEUE`** items keyed by **`(tenant_id, tx_id)`**; persisted resolve responses for idempotent replay. |
 | **`ConfirmedExampleStore`** | `confirmed_example` | Rows keyed logically by **`tenant_id`** (+ `vendor_key` column); used to **sample up to N few-shot examples** for prompts (deterministic RNG seed from **`tx_id`**). |
+| **`RetrievalCorpusStore`** | `retrieval_corpus` | **Phase 1:** one row per **`(tenant_id, tx_id)`** after successful review resolve; structured fields for future RAG; **`GET /corpus/{tenant_id}`** reads here. |
 
 ### 6.B Operational notes
 
@@ -165,6 +166,7 @@ All these stores share the **`STATE_DB_PATH`** configured in **`app/main.py`** (
 | Work waiting for reviewers | SQLite `review_queue` |
 | Idempotent reviewer outcomes | SQLite `review_resolution` |
 | Past corrections/acceptances for few-shot enrichment | SQLite `confirmed_example` |
+| Human-confirmed labels for future retrieval (Phase 1) | SQLite `retrieval_corpus` (see `docs/PHASE1_RETRIEVAL_CORPUS.md`) |
 | Tenant config + thresholds | `data/tenants.json` |
 | Allowed accounts | `data/coa/{tenant}.json` |
 

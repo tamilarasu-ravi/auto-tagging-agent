@@ -76,10 +76,57 @@ class ReviewResolveResponse(BaseModel):
 
 
 class ReviewQueueItem(BaseModel):
+    """Pending human review for one transaction (includes optional fields for Phase 1 retrieval corpus)."""
+
     tx_id: str
     tenant_id: str
     vendor_key: str
     suggested_coa_account_id: str
     confidence: float
     reasoning: str
+    idempotency_key: str
+    vendor_raw: str | None = Field(default=None, max_length=MAX_VENDOR_RAW_LEN)
+    amount: str | None = Field(default=None, description="Decimal amount string from original transaction.")
+    currency: str | None = Field(default=None, max_length=8)
+    transaction_date: date | None = Field(default=None, description="Spend date from original transaction.")
+    transaction_type: Literal["card", "bill"] | None = Field(default=None)
+
+
+class RetrievalCorpusDocument(BaseModel):
+    """One persisted human-confirmed label row for future retrieval / embedding (Phase 1 store)."""
+
+    corpus_id: int
+    tenant_id: str
+    tx_id: str
+    vendor_key: str
+    vendor_raw: str | None = None
+    amount: str | None = None
+    currency: str | None = None
+    transaction_date: date | None = None
+    transaction_type: Literal["card", "bill"] | None = None
+    final_coa_account_id: str
+    suggested_coa_account_id: str | None = None
+    confidence: float | None = None
+    resolution_action: Literal["accept", "correct"]
+    idempotency_key: str
+    created_at: datetime
+    embedding_model: str | None = None
+    embedding_version: int | None = None
+
+
+class RetrievalCorpusInsert(BaseModel):
+    """Payload to append one retrieval corpus row after a successful review resolve."""
+
+    tenant_id: str
+    tx_id: str
+    vendor_key: str
+    vendor_raw: str | None = None
+    amount: str | None = None
+    currency: str | None = None
+    transaction_date: date | None = None
+    transaction_type: Literal["card", "bill"] | None = None
+    final_coa_account_id: str
+    suggested_coa_account_id: str | None = None
+    confidence: float | None = None
+    resolution_action: Literal["accept", "correct"]
     idempotency_key: str

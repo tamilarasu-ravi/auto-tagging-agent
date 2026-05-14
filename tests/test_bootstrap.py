@@ -278,6 +278,15 @@ def test_resolve_review_item_accept_removes_from_queue() -> None:
     assert queue_response.status_code == 200
     assert all(item["tx_id"] != tx_id for item in queue_response.json())
 
+    corpus = client.get("/corpus/tenant_a", headers=_headers("tenant_a")).json()
+    match = [row for row in corpus if row["tx_id"] == tx_id]
+    assert len(match) == 1
+    assert match[0]["final_coa_account_id"] == "7200"
+    assert match[0]["resolution_action"] == "accept"
+    assert match[0]["vendor_raw"] == vendor_raw
+    assert match[0]["amount"] == "18.50"
+    assert match[0]["currency"] == "SGD"
+
 
 def test_resolve_review_item_correct_overrides_coa() -> None:
     client = TestClient(app)
@@ -350,6 +359,9 @@ def test_resolve_review_item_is_idempotent_after_first_resolution() -> None:
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json() == second.json()
+
+    corpus_rows = [r for r in client.get("/corpus/tenant_a", headers=_headers("tenant_a")).json() if r["tx_id"] == tx_id]
+    assert len(corpus_rows) == 1
 
 
 def test_resolve_review_item_rejects_conflicting_replay_payload() -> None:
@@ -493,6 +505,13 @@ def test_tenant_auth_rejects_invalid_api_key() -> None:
     response = client.post("/transactions/tag", json=payload, headers={"X-API-Key": "wrong_key"})
 
     assert response.status_code == 403
+
+
+def test_corpus_endpoint_requires_matching_api_key() -> None:
+    """GET /corpus/{tenant_id} uses same tenant-scoped API key policy as other reads."""
+    client = TestClient(app)
+    r = client.get("/corpus/tenant_b", headers=_headers("tenant_a"))
+    assert r.status_code == 403
 
 
 def test_tag_endpoint_rejects_overlong_vendor_raw() -> None:

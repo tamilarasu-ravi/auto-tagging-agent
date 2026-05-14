@@ -160,6 +160,7 @@ sequenceDiagram
   - `idempotency_store.py`,
   - `review_queue.py`,
   - `confirmed_example_store.py`,
+  - `retrieval_corpus_store.py` (Phase 1 retrieval corpus for future RAG),
   - `rule_store.py`.
 - **Adapter**: `adapters/accounting_sync.py` (mock external accounting integration boundary).
 
@@ -187,9 +188,9 @@ sequenceDiagram
   - `404` if queue item missing,
   - `409` if replay payload conflicts with previously resolved payload.
 
-### `GET /audit-log/{tenant_id}`, `GET /rules/{tenant_id}`
+### `GET /audit-log/{tenant_id}`, `GET /rules/{tenant_id}`, `GET /corpus/{tenant_id}`
 
-- Tenant-scoped read APIs for observability and deterministic rule inspection.
+- Tenant-scoped read APIs for observability, deterministic rule inspection, and **Phase 1** retrieval-corpus rows (human-confirmed labels for future RAG).
 
 ## 6) Failure-Mode Strategy
 

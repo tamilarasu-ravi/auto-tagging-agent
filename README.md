@@ -26,7 +26,7 @@ The agent auto-tags each transaction to a tenant-specific Chart of Accounts (CoA
 
 - `README.md` (this file): executive summary, MVP scope, setup/run/test instructions, submission context, and [post-MVP implementation plan](#post-mvp-implementation-plan).
 - `ARCHITECTURE.md`: canonical system design, invariants, API architecture contracts, failure-mode handling, and MVP-vs-production boundary decisions.
-- `docs/HOW_IT_WORKS.md`, `docs/FLOW_TENANT_A.md`, `docs/FLOW_TENANT_B.md`, `docs/RULES_LLM_AND_DATABASE.md`: deeper implementation walkthroughs.
+- `docs/HOW_IT_WORKS.md`, `docs/FLOW_TENANT_A.md`, `docs/FLOW_TENANT_B.md`, `docs/RULES_LLM_AND_DATABASE.md`, `docs/PHASE1_RETRIEVAL_CORPUS.md`: deeper implementation walkthroughs.
 
 ## Quick 5-Min Verify
 
@@ -105,13 +105,23 @@ pytest -q tests/test_golden_gate.py
 
 **Exit (Phase 0):** golden cases and metric baselines are versioned; `pytest` enforces them. Re-run `--write-baseline` only when `edge_cases.json` expectations or scoring logic change deliberately.
 
-### Phase 1 — Retrieval data model (2–4 days)
+### Phase 1 — Retrieval data model (implemented)
 
-- Persist each human-confirmed final label as a **retrievable row**: e.g. `tenant_id`, `vendor_key`, optional amount bucket / `currency` / `transaction_type`, `final_coa_account_id`, provenance (`review_accept` / `review_correct` / import), timestamps, optional `tx_id`.
-- **Write path:** extend review resolve (and any path that produces a trusted final CoA) to upsert this corpus.
-- **Read path:** internal query API only (no change to default tagging behaviour until Phase 2).
+**Goal:** persist human-confirmed labels in a dedicated SQLite table for future embedding / RAG, without changing the classifier or prompts yet.
 
-**Exit:** corpus grows from real resolutions; optional backfill from existing `confirmed_example` rows if desired.
+**Delivered**
+
+- New table **`retrieval_corpus`** on shared `data/runtime/state.db` via `app/store/retrieval_corpus_store.py` (`UNIQUE (tenant_id, tx_id)`, reserved `embedding_*` columns).
+- **`ReviewQueueItem`** extended with optional `vendor_raw`, `amount`, `currency`, `transaction_date`, `transaction_type` (populated when enqueueing from `POST /transactions/tag`).
+- **`TaggingService.resolve_review_item`** writes one **`RetrievalCorpusInsert`** per first successful resolve (idempotent replays skip duplicate writes).
+- **`GET /corpus/{tenant_id}`** — tenant-scoped read (`limit`/`offset`), same `X-API-Key` policy as audit/rules.
+- Models: `RetrievalCorpusDocument`, `RetrievalCorpusInsert` in `app/models.py`.
+- Tests: `tests/test_retrieval_corpus_store.py`, bootstrap assertions + corpus auth test.
+- Doc: [`docs/PHASE1_RETRIEVAL_CORPUS.md`](docs/PHASE1_RETRIEVAL_CORPUS.md).
+
+**Not in this phase:** embeddings, vector search, prompt/few-shot changes, writes from non-review `AUTO_TAG` paths, optional backfill from `confirmed_example` (still available as a follow-up).
+
+**Exit:** resolve → queryable corpus row with final CoA + transaction context; Phase 0 gates still green.
 
 ### Phase 2 — Vanilla RAG (4–7 days)
 
@@ -313,6 +323,7 @@ auto-tagging-agent/
 │   │   ├── idempotency_store.py # Idempotency cache (SQLite)
 │   │   ├── review_queue.py      # Review queue + idempotent resolution replay (SQLite)
 │   │   ├── confirmed_example_store.py # Few-shot confirmed examples (SQLite)
+│   │   ├── retrieval_corpus_store.py # Phase 1: retrieval corpus rows (SQLite)
 │   │   └── rule_store.py        # Tenant vendor→CoA rules (JSON-backed + runtime JSON overlay)
 │   └── adapters/
 │       └── accounting_sync.py   # Mock accounting platform sync
@@ -826,6 +837,7 @@ This output demonstrates the full safety story: rule-based auto-tag, LLM with me
 | `GET`  | `/review-queue/{tenant_id}`     | List pending review items        |
 | `POST` | `/review-queue/{tx_id}/resolve` | Accept or correct a suggestion   |
 | `GET`  | `/audit-log/{tenant_id}`        | View full audit trail            |
+| `GET`  | `/corpus/{tenant_id}`           | List retrieval-corpus rows (Phase 1; post-review labels) |
 | `GET`  | `/rules/{tenant_id}`            | View current vendor rule store   |
 
 ---

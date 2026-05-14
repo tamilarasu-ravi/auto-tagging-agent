@@ -48,6 +48,7 @@ Rough order:
    - `IdempotencyStore(STATE_DB_PATH)`
    - `ReviewQueueStore(STATE_DB_PATH)`
    - `ConfirmedExampleStore(STATE_DB_PATH)`
+   - `RetrievalCorpusStore(STATE_DB_PATH)` (Phase 1 retrieval corpus)
 
 4. **Per-tenant CoA and API keys**
    - For each tenant in config, read JSON at `tenant_cfg.coa_path`, parse into `list[CoAAccount]`.
@@ -79,6 +80,7 @@ Still `app/main.py`.
 | `/review-queue/{tenant_id}` | GET | `X-API-Key` | path: `tenant_id` | `_authorize_tenant_request` → `review_queue_store.list_by_tenant` |
 | `/review-queue/{tx_id}/resolve` | POST | `X-API-Key` | path: `tx_id`; JSON `ReviewResolveRequest` | `_authorize_tenant_request` → `tagging_service.resolve_review_item(tx_id, request)` |
 | `/audit-log/{tenant_id}` | GET | `X-API-Key` | path: `tenant_id` | `_authorize_tenant_request` → `audit_store.list_by_tenant` |
+| `/corpus/{tenant_id}` | GET | `X-API-Key` | path: `tenant_id`; query: `limit`, `offset` | `_authorize_tenant_request` → `retrieval_corpus_store.list_by_tenant` |
 | `/rules/{tenant_id}` | GET | `X-API-Key` | path: `tenant_id` | `_authorize_tenant_request` → `rule_store.list_rules` |
 
 ### 3.A Auth helper
@@ -253,7 +255,7 @@ Client / scripts/demo_scenario.TestClient
                                        → route_by_confidence
                                        → Audit; optional Sync / ReviewQueue / UNKNOWN
         → TaggingService.resolve_review_item(tx_id, ReviewResolveRequest)
-            → ReviewQueueStore + RuleStore upsert + ConfirmedExampleStore + Audit + Sync
+            → ReviewQueueStore + RuleStore upsert + ConfirmedExampleStore + RetrievalCorpusStore + Audit + Sync
 ```
 
 ---
