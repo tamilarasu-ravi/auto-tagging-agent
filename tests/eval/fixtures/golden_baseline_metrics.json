@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "documented_at": "2026-05-14T10:50:42.593011+00:00",
+  "fixture": "tests/eval/fixtures/edge_cases.json",
+  "note": "Captured with LLM_ENABLE_LIVE_CALLS=false (deterministic classifier). Re-run --write-baseline after intentional pipeline changes.",
+  "tenants": {
+    "tenant_a": {
+      "total_fixtures": 20.0,
+      "auto_tag_total": 8,
+      "auto_tag_correct": 8,
+      "auto_tag_precision": 100.0,
+      "long_tail_unknown_rate": 100.0,
+      "review_rate": 30.0,
+      "brier_score": 0.030257142857142854,
+      "rule_coverage": 10.0
+    },
+    "tenant_b": {
+      "total_fixtures": 20.0,
+      "auto_tag_total": 0,
+      "auto_tag_correct": 0,
+      "auto_tag_precision": null,
+      "long_tail_unknown_rate": 100.0,
+      "review_rate": 65.0,
+      "brier_score": 0.04046153846153845,
+      "rule_coverage": 0.0
+    }
+  }
+}

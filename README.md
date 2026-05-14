@@ -33,6 +33,8 @@ The agent auto-tags each transaction to a tenant-specific Chart of Accounts (CoA
 ```bash
 python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 pytest -q
+LLM_ENABLE_LIVE_CALLS=false python3 tests/eval/golden_gate.py
+LLM_ENABLE_LIVE_CALLS=false python3 tests/eval/golden_gate.py --check-metrics
 BASE_URL="http://127.0.0.1:8011" AUTO_START_SERVER=true SMOKE_LLM_ENABLE_LIVE_CALLS=false bash scripts/smoke_test.sh
 ```
 
@@ -75,13 +77,33 @@ Phased roadmap after the MVP: **tenant-scoped retrieval (RAG)**, **MCP-backed to
 - **Tenant isolation:** every retrieval query and index partition is scoped by `tenant_id` server-side.
 - **Observability:** log tool name, latency, and truncated args—not raw chain-of-thought; keep `reasoning` short and sanitized as today.
 
-### Phase 0 — Baseline and eval gates (1–2 days)
+### Phase 0 — Baseline and eval gates (implemented)
 
-- Capture current metrics from `tests/eval/eval_runner.py` and `pytest` for `tenant_a` / `tenant_b`.
-- Add a small **golden eval set** (20–50 cases: vendor, tenant, expected status, and CoA when `AUTO_TAG`).
-- Define regression gates (e.g. auto-tag precision on golden set must not drop; review/unknown rates within agreed bounds).
+**Artifacts**
 
-**Exit:** baseline numbers recorded; CI or local script can run the golden set before/after each phase.
+| Artifact | Purpose |
+|----------|---------|
+| `tests/eval/fixtures/golden_cases.json` | 21 curated rows (`tenant_a` + `tenant_b`): expected `status` and `coa_account_id` (or `null` for `UNKNOWN`) under `LLM_ENABLE_LIVE_CALLS=false`. |
+| `tests/eval/fixtures/golden_baseline_metrics.json` | Snapshot of `run_eval` aggregates on `edge_cases.json` per tenant (regression slack for precision, long-tail safety, Brier). |
+| `tests/eval/golden_gate.py` | CLI: default golden run; `--check-metrics`; `--write-baseline`. |
+| `tests/test_golden_gate.py` | Pytest: golden cases + metric gate (runs in CI with `conftest.py` forcing deterministic classifier). |
+
+**Commands** (from repo root; `LLM_ENABLE_LIVE_CALLS=false` matches CI/tests)
+
+```bash
+# Strict per-case gate (status + CoA)
+LLM_ENABLE_LIVE_CALLS=false python3 tests/eval/golden_gate.py
+
+# Aggregate gate vs committed golden_baseline_metrics.json
+LLM_ENABLE_LIVE_CALLS=false python3 tests/eval/golden_gate.py --check-metrics
+
+# After intentional behaviour change to edge-case harness, refresh baseline (commit the JSON)
+LLM_ENABLE_LIVE_CALLS=false python3 tests/eval/golden_gate.py --write-baseline
+
+pytest -q tests/test_golden_gate.py
+```
+
+**Exit (Phase 0):** golden cases and metric baselines are versioned; `pytest` enforces them. Re-run `--write-baseline` only when `edge_cases.json` expectations or scoring logic change deliberately.
 
 ### Phase 1 — Retrieval data model (2–4 days)
 
@@ -310,10 +332,15 @@ auto-tagging-agent/
 │   ├── test_rule_engine.py
 │   ├── test_validator.py
 │   ├── test_router.py
+│   ├── test_eval_runner.py
+│   ├── test_golden_gate.py      # Phase 0: golden + baseline metric gates
 │   └── eval/
 │       ├── eval_runner.py       # Offline eval harness
+│       ├── golden_gate.py       # Phase 0: golden_cases + baseline metrics CLI
 │       └── fixtures/
-│           └── edge_cases.json  # Long-tail vendor eval dataset
+│           ├── edge_cases.json  # Long-tail vendor eval dataset
+│           ├── golden_cases.json
+│           └── golden_baseline_metrics.json
 ├── pytest.ini                   # pytest import path hardening (repo root)
 ├── requirements.txt
 └── README.md
@@ -590,6 +617,8 @@ A prompt change, model upgrade, or threshold adjustment must pass the eval harne
 python tests/eval/eval_runner.py --tenant tenant_a --fixture tests/eval/fixtures/edge_cases.json
 python tests/eval/eval_runner.py --tenant tenant_b --fixture tests/eval/fixtures/edge_cases.json
 ```
+
+**Phase 0 gates (post-MVP):** `tests/eval/golden_gate.py` runs strict checks on `tests/eval/fixtures/golden_cases.json` and optional aggregate regression vs `tests/eval/fixtures/golden_baseline_metrics.json` (`--check-metrics`). See [Post-MVP implementation plan — Phase 0](#post-mvp-implementation-plan).
 
 Example output (as of the current `edge_cases.json` harness — 20 fixtures per tenant):
 
